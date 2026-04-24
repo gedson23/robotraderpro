@@ -49,6 +49,12 @@
       margin-top: 4px; font-size: 14px; min-height: 44px;
       -webkit-appearance: none;
     }
+    /* inputs de saldo */
+    .saldo-input {
+      background: transparent; border: 1px solid #334155; 
+      padding: 6px 8px; border-radius: 6px; color: #fff; 
+      font-weight: bold; font-size: 14px; width: 100px; text-align: right;
+    }
     #log, #history-log { 
       max-height: 200px; overflow-y: auto; font-family: monospace; 
       background: #0f172a; padding: 10px; border-radius: 8px; 
@@ -186,8 +192,14 @@
       <div class="row"><span>RSI (14)</span><b id="rsi">--</b></div>
     </div>
     <div class="card">
-      <div class="row"><span>💰 Saldo USDT</span><b id="saldoUSDT">--</b></div>
-      <div class="row"><span>💰 Saldo BRL</span><b id="saldoBRL">--</b></div>
+      <div class="row">
+        <span>💰 Saldo USDT</span>
+        <input type="number" id="saldoUSDTInput" class="saldo-input" value="10000" step="0.01" min="0">
+      </div>
+      <div class="row">
+        <span>💰 Saldo BRL</span>
+        <input type="number" id="saldoBRLInput" class="saldo-input" value="52000" step="0.01" min="0">
+      </div>
       <div class="row"><span>Posição</span><b id="position">—</b></div>
       <div class="row"><span>Qtd. Moeda</span><b id="positionQty">—</b></div>
       <div class="row"><span>Entrada (USDT)</span><b id="entryPrice">—</b></div>
@@ -336,6 +348,29 @@
       const STORAGE_KEY = 'roboTraderPro_v5.6';
       let wsReconnectTimer = null, reconnectAttempts = 0, manualDisconnect = false;
 
+      // Elementos de saldo editáveis
+      const saldoUSDTInput = document.getElementById('saldoUSDTInput');
+      const saldoBRLInput = document.getElementById('saldoBRLInput');
+
+      // Sincroniza saldo USDT -> BRL e vice-versa
+      function atualizarSaldoEditavel(origem) {
+        if (origem === 'usdt') {
+          const val = parseFloat(saldoUSDTInput.value) || 0;
+          saldoUSDT = val;
+          saldoBRLInput.value = (val * usdBrlRate).toFixed(2);
+        } else if (origem === 'brl') {
+          const val = parseFloat(saldoBRLInput.value) || 0;
+          saldoUSDT = val / usdBrlRate;
+          saldoUSDTInput.value = saldoUSDT.toFixed(2);
+        }
+        // Atualiza outros elementos que mostram saldo (se houver)
+        atualizarSaldoUI();
+        salvarEstado();
+      }
+
+      saldoUSDTInput.addEventListener('input', () => atualizarSaldoEditavel('usdt'));
+      saldoBRLInput.addEventListener('input', () => atualizarSaldoEditavel('brl'));
+
       function salvarEstado() {
         const estado = {
           saldoUSDT, qtyAtivo, currentPosition, tradeHistory,
@@ -389,6 +424,9 @@
             document.getElementById('trailingActivation').value = e.strategy.trailingActivation || 0.5;
             document.getElementById('useTrailingStop').checked = e.strategy.useTrailing !== false;
           }
+          // Inicializa campos de saldo com o valor carregado
+          saldoUSDTInput.value = saldoUSDT.toFixed(2);
+          saldoBRLInput.value = (saldoUSDT * usdBrlRate).toFixed(2);
           atualizarUIExchange(); log('📂 Estado restaurado.'); return true;
         } catch (err) { return false; }
       }
@@ -410,14 +448,21 @@
       async function atualizarCotacaoBRL() {
         try {
           const resp = await fetch('https://economia.awesomeapi.com.br/last/USD-BRL');
-          usdBrlRate = parseFloat((await resp.json()).USDBRL.bid);
+          const novaTaxa = parseFloat((await resp.json()).USDBRL.bid);
+          if (novaTaxa && !isNaN(novaTaxa)) {
+            usdBrlRate = novaTaxa;
+            // Atualiza campo BRL baseado no saldo USDT atual
+            saldoBRLInput.value = (saldoUSDT * usdBrlRate).toFixed(2);
+            atualizarSaldoUI();
+          }
         } catch (e) {}
-        atualizarSaldoUI();
       }
 
       function atualizarSaldoUI() {
-        setText('saldoUSDT', saldoUSDT.toFixed(2));
-        setText('saldoBRL', `R$ ${formatBRL(saldoUSDT)}`);
+        // Atualiza os inputs de saldo com os valores atuais (se não estiverem em foco)
+        if (document.activeElement !== saldoUSDTInput) saldoUSDTInput.value = saldoUSDT.toFixed(2);
+        if (document.activeElement !== saldoBRLInput) saldoBRLInput.value = (saldoUSDT * usdBrlRate).toFixed(2);
+        // Preço BRL do ativo
         const price = series.length ? series[series.length-1].close : 0;
         setText('priceBRL', price ? `R$ ${(price * usdBrlRate).toFixed(2)}` : '--');
       }
@@ -551,6 +596,8 @@
             currentPosition = null; qtyAtivo = 0;
             log('Saldo Binance carregado (posição spot não rastreada).');
           }
+          saldoUSDTInput.value = saldoUSDT.toFixed(2);
+          saldoBRLInput.value = (saldoUSDT * usdBrlRate).toFixed(2);
           atualizarSaldoUI(); renderPosition(); salvarEstado();
           log(`Saldo real: ${saldoUSDT.toFixed(2)} USDT`);
         } catch (e) { log('Erro saldo: ' + e.message); }
@@ -917,7 +964,13 @@
       });
       document.getElementById('refreshChartBtn').onclick = () => fetchHistoricalKlines();
 
-      initChart(); atualizarCotacaoBRL(); carregarEstado();
+      initChart(); atualizarCotacaoBRL();
+      const carregou = carregarEstado();
+      if (!carregou) {
+        // Se não havia estado salvo, inicia com valores padrão
+        saldoUSDTInput.value = saldoUSDT.toFixed(2);
+        saldoBRLInput.value = (saldoUSDT * usdBrlRate).toFixed(2);
+      }
       STRATEGY = {
         orderQty: +document.getElementById('orderQty').value,
         tp: +document.getElementById('tpInput').value/100,
